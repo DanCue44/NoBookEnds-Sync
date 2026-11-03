@@ -1,0 +1,36 @@
+<?xml version="1.0"?>
+<Container version="2">
+  <Name>NoBookEnds-Sync</Name>
+  <Repository>ghcr.io/dancue44/nobookends-sync:latest</Repository>
+  <Registry>https://github.com/DanCue44/NoBookEnds-Sync/pkgs/container/nobookends-sync</Registry>
+  <Network>bridge</Network>
+  <MyIP/>
+  <Shell>bash</Shell>
+  <Privileged>false</Privileged>
+  <Support>https://nobookends.com/support/</Support>
+  <Project>https://nobookends.com/sync/</Project>
+  <Overview>Exact sync for Listen &amp; Read in the NoBookEnds app. Runs next to Audiobookshelf, transcribes each audiobook once with faster-whisper and aligns it to the matching EPUB, so the app can highlight the sentence and word being read. Optional: NoBookEnds works without it.[br][br]This template uses the NVIDIA GPU image (:latest, needs the Nvidia Driver plugin). Without an NVIDIA GPU use the CPU template instead, or change Repository to ghcr.io/dancue44/nobookends-sync:cpu and remove --runtime=nvidia from Extra Parameters.[br][br]Automatic alignments of your existing library only run overnight (Auto window, default 01:00-06:00 in the server time zone). Books a reader asks for in the app start right away.[br][br]Give it a public HTTPS address such as booksync.yourdomain.com through your reverse proxy so phones can reach it. Everything stays on your server.</Overview>
+  <Category>MediaServer:Books Tools:</Category>
+  <WebUI/>
+  <TemplateURL/>
+  <Icon>https://nobookends.com/assets/img/icon-256.png</Icon>
+  <ExtraParams>--runtime=nvidia</ExtraParams>
+  <PostArgs/>
+  <CPUset/>
+  <DateInstalled/>
+  <DonateText/>
+  <DonateLink/>
+  <Requires>Audiobookshelf, and the Nvidia Driver plugin for GPU transcription.</Requires>
+  <Config Name="WebUI / API port" Target="8000" Default="8000" Mode="tcp" Description="HTTP API port. Point your reverse proxy (for example booksync.yourdomain.com) at it." Type="Port" Display="always" Required="true" Mask="false">8000</Config>
+  <Config Name="Data" Target="/data" Default="/mnt/user/appdata/nobookends-sync" Mode="rw" Description="Database, alignment results, cached transcripts and whisper models (a few GB for a large library)." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/nobookends-sync</Config>
+  <Config Name="Audiobookshelf URL" Target="ABS_URL" Default="" Mode="" Description="Audiobookshelf as seen from this container: your server IP and the Audiobookshelf port (for example http://192.168.1.10:13378), or http://audiobookshelf:80 when both containers share a custom Docker network." Type="Variable" Display="always" Required="true" Mask="false"/>
+  <Config Name="Audiobookshelf API key" Target="ABS_API_KEY" Default="" Mode="" Description="API key of a dedicated Audiobookshelf user that can download but not upload, update or delete, with access to all libraries (see the README)." Type="Variable" Display="always" Required="true" Mask="true"/>
+  <Config Name="Admin token" Target="ADMIN_TOKEN" Default="" Mode="" Description="Long random secret that enables the admin API (used by AllSeerr Settings &gt; Services). Leave empty to disable the admin API." Type="Variable" Display="always" Required="false" Mask="true"/>
+  <Config Name="Auto window" Target="AUTO_WINDOW" Default="01:00-06:00" Mode="" Description="Local time window for automatic alignments of your library, for example 01:00-06:00 or 22:30-05:00. Use always to run them at any time. Books readers ask for are never held back." Type="Variable" Display="always" Required="false" Mask="false">01:00-06:00</Config>
+  <Config Name="Auto mode" Target="AUTO_ALIGN" Default="true" Mode="" Description="Find audiobook and EPUB pairs in Audiobookshelf and align them automatically (inside the auto window). false: only align books readers ask for." Type="Variable" Display="always" Required="false" Mask="false">true</Config>
+  <Config Name="Whisper model" Target="WHISPER_MODEL" Default="small.en" Mode="" Description="small.en is a good balance. base.en is about twice as fast; medium.en is slower and more accurate on difficult audio. Use small or medium (without .en) for books not in English." Type="Variable" Display="advanced" Required="false" Mask="false">small.en</Config>
+  <Config Name="Whisper language" Target="WHISPER_LANGUAGE" Default="en" Mode="" Description="Language code for multilingual models (ignored by .en models)." Type="Variable" Display="advanced" Required="false" Mask="false">en</Config>
+  <Config Name="GPU compute type" Target="WHISPER_COMPUTE_TYPE" Default="int8" Mode="" Description="int8 works on every NVIDIA GPU (and is the fastest choice on Pascal cards such as the P2000). float16 can be faster on Turing (GTX 16xx / RTX 20xx) and newer." Type="Variable" Display="advanced" Required="false" Mask="false">int8</Config>
+  <Config Name="NVIDIA visible devices" Target="NVIDIA_VISIBLE_DEVICES" Default="all" Mode="" Description="all, or the UUID of one GPU (nvidia-smi -L)." Type="Variable" Display="advanced" Required="false" Mask="false">all</Config>
+  <Config Name="NVIDIA driver capabilities" Target="NVIDIA_DRIVER_CAPABILITIES" Default="compute,utility" Mode="" Description="Leave as compute,utility." Type="Variable" Display="advanced" Required="false" Mask="false">compute,utility</Config>
+</Container>

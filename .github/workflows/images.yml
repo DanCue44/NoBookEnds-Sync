@@ -1,0 +1,134 @@
+name: images
+
+# Builds the container images on the self-hosted Unraid runner and pushes them
+# to ghcr.io/dancue44/nobookends-sync:
+#
+#   push to main  -> latest, cuda, cpu, sha-<short>, sha-<short>-cpu
+#   tag vX.Y.Z    -> X.Y.Z, X.Y, X.Y.Z-cuda, X.Y.Z-cpu, X.Y-cpu
+#   manual run    -> the same tags as the ref it runs on (a branch other than
+#                    main gets <branch> and <branch>-cpu)
+#
+# The runner host is amd64 with no buildx, so both images are built with the
+# classic builder (plain docker build) for linux/amd64. The CUDA image needs no
+# GPU to build or to pass the import smoke test.
+#
+# The package visibility is managed on GitHub, not here.
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+
+concurrency:
+  group: images-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  IMAGE: ghcr.io/dancue44/nobookends-sync
+
+jobs:
+  test:
+    runs-on: [self-hosted, unraid, nobookends-sync]
+    container:
+      image: python:3.12-bookworm
+    steps:
+      - uses: actions/checkout@v4
+      - run: pip install -r requirements-dev.txt
+      - run: python -m pytest
+
+  build:
+    needs: test
+    runs-on: [self-hosted, unraid, nobookends-sync]
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      # One runner: build the variants one after the other.
+      max-parallel: 1
+      matrix:
+        include:
+          - variant: cuda
+            dockerfile: Dockerfile
+            suffix: ""
+          - variant: cpu
+            dockerfile: Dockerfile.cpu
+            suffix: "-cpu"
+    env:
+      CI_KEY: nbe-sync-ci-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.variant }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+          flavor: |
+            latest=false
+          tags: |
+            type=raw,value=latest,enable=${{ matrix.variant == 'cuda' && github.ref == 'refs/heads/main' }}
+            type=raw,value=${{ matrix.variant }},enable=${{ github.ref == 'refs/heads/main' }}
+            type=sha,format=short,suffix=${{ matrix.suffix }},enable=${{ github.ref == 'refs/heads/main' }}
+            type=ref,event=branch,suffix=${{ matrix.suffix }},enable=${{ github.ref != 'refs/heads/main' }}
+            type=semver,pattern={{version}},enable=${{ matrix.variant == 'cuda' }}
+            type=semver,pattern={{major}}.{{minor}},enable=${{ matrix.variant == 'cuda' }}
+            type=semver,pattern={{version}},suffix=-${{ matrix.variant }}
+            type=semver,pattern={{major}}.{{minor}},suffix=-cpu,enable=${{ matrix.variant == 'cpu' }}
+          labels: |
+            org.opencontainers.image.title=NoBookEnds Sync
+            org.opencontainers.image.vendor=DanCueDigital LLC
+
+      # Every stage gets a run label so the cleanup step can remove all of this
+      # run's images, including the untagged build stage.
+      - name: Build
+        shell: bash
+        env:
+          LABELS: ${{ steps.meta.outputs.labels }}
+          DOCKERFILE: ${{ matrix.dockerfile }}
+        run: |
+          set -euo pipefail
+          sed -e "/^FROM /a LABEL io.dancue44.ci.key=$CI_KEY" "$DOCKERFILE" > "$RUNNER_TEMP/Dockerfile.$CI_KEY"
+          label_args=()
+          while IFS= read -r l; do [[ -n "$l" ]] && label_args+=(--label "$l"); done <<< "$LABELS"
+          docker build --force-rm --pull -f "$RUNNER_TEMP/Dockerfile.$CI_KEY" "${label_args[@]}" -t "$CI_KEY:build" .
+
+      - name: Smoke test
+        run: |
+          docker run --rm --entrypoint python3 "$CI_KEY:build" -c \
+            "import faster_whisper, ctranslate2, av, zoneinfo; import nobookends_sync.api; \
+             zoneinfo.ZoneInfo('America/Chicago'); print('ok', ctranslate2.__version__)"
+          docker image ls "$CI_KEY"
+
+      # A tag that already exists on this host is pointed back at its previous
+      # image right after the push, so CI never changes what local containers
+      # would start from.
+      - name: Push
+        shell: bash
+        env:
+          TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          set -euo pipefail
+          while IFS= read -r tag; do
+            [[ -z "$tag" ]] && continue
+            prev="$(docker image inspect -f '{{.Id}}' "$tag" 2>/dev/null || true)"
+            docker tag "$CI_KEY:build" "$tag"
+            push_ok=true
+            docker push "$tag" || push_ok=false
+            if [[ -n "$prev" ]]; then docker tag "$prev" "$tag"; else docker rmi "$tag" >/dev/null; fi
+            [[ "$push_ok" == true ]] || exit 1
+          done <<< "$TAGS"
+
+      - name: Clean up
+        if: always()
+        run: |
+          docker rmi "$CI_KEY:build" >/dev/null 2>&1 || true
+          docker image prune -af --filter "label=io.dancue44.ci.key=$CI_KEY" | tail -n 1 || true
+          docker logout ghcr.io >/dev/null 2>&1 || true
+          docker system df
