@@ -24,7 +24,11 @@ RUN apt-get update \
  && python3 -m venv /opt/venv
 
 COPY requirements.txt /tmp/requirements.txt
-RUN /opt/venv/bin/pip install -r /tmp/requirements.txt \
+# Up to three tries: a download cut off midway is not retried by pip itself
+RUN for try in 1 2 3; do \
+      /opt/venv/bin/pip install -r /tmp/requirements.txt && break; \
+      [ "$try" = 3 ] && exit 1; sleep 20; \
+    done \
  && /opt/venv/bin/pip uninstall -y pip \
  && find /opt/venv -type d -name __pycache__ -prune -exec rm -rf {} +
 
