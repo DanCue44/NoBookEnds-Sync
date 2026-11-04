@@ -38,7 +38,7 @@ def setup(tmp_path, epub_path, book, monkeypatch):
         def get_item(self, item_id, expanded=True):
             return audio_item if item_id == AUDIO else ebook_item
 
-        def download_ebook(self, item_id, dest):
+        def download_ebook(self, item_id, dest, path=None):
             shutil.copy(epub_path, dest)
 
         def download_track(self, item_id, track, dest):
@@ -253,7 +253,7 @@ def test_kindle_ebook_is_converted_and_aligned(tmp_path, monkeypatch):
         def get_item(self, item_id, expanded=True):
             return audio_item if item_id == AUDIO else ebook_item
 
-        def download_ebook(self, item_id, dest):
+        def download_ebook(self, item_id, dest, path=None):
             downloads.append(item_id)
             shutil.copy(azw3, dest)
 

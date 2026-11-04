@@ -70,16 +70,47 @@ def audio_tracks(item: dict) -> list[dict]:
     return out
 
 
+def _epub_supplement(item: dict) -> dict | None:
+    """An EPUB among an expanded item's other files (Talearr's copy of a Kindle book)."""
+    for f in item.get("libraryFiles") or []:
+        md = f.get("metadata") or {}
+        if (md.get("ext") or "").lower() != ".epub":
+            continue
+        if f.get("fileType") not in (None, "ebook"):
+            continue
+        return f
+    return None
+
+
 def ebook_file(item: dict) -> dict | None:
+    """The ebook file to align: the main one, or an EPUB next to a main file that is not one.
+
+    NoBookEnds opens that EPUB by default too, so both sides use the same file.
+    `path` is where ABS serves it.
+    """
     ef = (item.get("media") or {}).get("ebookFile")
     if not ef:
         return None
     md = ef.get("metadata") or {}
+    fmt = (ef.get("ebookFormat") or md.get("ext", "").lstrip(".")).lower()
+    main_ino = str(ef.get("ino"))
+    if fmt != "epub":
+        sup = _epub_supplement(item)
+        if sup and str(sup.get("ino")) != main_ino:
+            smd = sup.get("metadata") or {}
+            return {
+                "ino": str(sup.get("ino")),
+                "format": "epub",
+                "size": smd.get("size"),
+                "mtime": smd.get("mtimeMs"),
+                "path": f"/api/items/{item.get('id')}/ebook/{sup.get('ino')}",
+            }
     return {
-        "ino": str(ef.get("ino")),
-        "format": (ef.get("ebookFormat") or md.get("ext", "").lstrip(".")).lower(),
+        "ino": main_ino,
+        "format": fmt,
         "size": md.get("size"),
         "mtime": md.get("mtimeMs"),
+        "path": f"/api/items/{item.get('id')}/ebook",
     }
 
 
@@ -158,8 +189,8 @@ class ServiceClient:
         except AbsError:
             return self.download(f"/api/items/{item_id}/file/{track['ino']}/download", dest)
 
-    def download_ebook(self, item_id: str, dest: Path) -> int:
-        return self.download(f"/api/items/{item_id}/ebook", dest)
+    def download_ebook(self, item_id: str, dest: Path, path: str | None = None) -> int:
+        return self.download(path or f"/api/items/{item_id}/ebook", dest)
 
 
 # ------------------------------------------------------------------ user auth

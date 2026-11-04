@@ -1,6 +1,6 @@
 """NoBookEnds Sync: align audiobook narration to EPUB text."""
 
-__version__ = "1.7.0"
+__version__ = "1.7.1"
 
 # Schema version of the alignment JSON returned to clients (contract v1).
 SCHEMA_VERSION = 1

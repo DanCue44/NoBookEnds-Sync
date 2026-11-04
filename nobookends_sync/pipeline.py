@@ -188,7 +188,7 @@ def _run(s: Settings, db: DB, abs_: ServiceClient, job: dict, work: Path):
         stats["convertedFrom"] = eb["format"]
     else:
         epub_path = work / "book.epub"
-        abs_.download_ebook(ebook_id, epub_path)
+        abs_.download_ebook(ebook_id, epub_path, eb.get("path"))
         book = load_epub(epub_path)
         epub_path.unlink(missing_ok=True)
     if len(book.tokens) < 50:

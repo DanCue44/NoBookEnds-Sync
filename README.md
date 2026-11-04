@@ -352,7 +352,9 @@ aligns against that EPUB and serves the same copy to the app at
 what the reader shows. The copy is cached under `/data/converted`, one per
 ebook file; a changed file, or a newer converter, makes a new copy and
 re-aligns the book. When an audiobook matches both an EPUB and a Kindle file,
-the EPUB is used.
+the EPUB is used. The same goes for one item holding both: when its main
+ebook is an AZW3 or MOBI and an EPUB sits next to it (a converted copy, say),
+the EPUB is aligned, which is the file NoBookEnds opens by default.
 
 KF8 (AZW3, and the KF8 half of a combined MOBI) and older Mobipocket files
 are read, uncompressed or compressed. Files with DRM (bought from a store)
