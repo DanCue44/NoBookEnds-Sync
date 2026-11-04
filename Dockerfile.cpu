@@ -9,8 +9,11 @@ ARG BASE_IMAGE=python:3.12-slim-bookworm
 # ---------------------------------------------------------------- build
 FROM ${BASE_IMAGE} AS build
 
+# A slow or briefly unreachable PyPI retries instead of failing the build
 ENV PIP_NO_CACHE_DIR=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_DEFAULT_TIMEOUT=60 \
+    PIP_RETRIES=10
 
 RUN python -m venv /opt/venv
 COPY requirements.txt /tmp/requirements.txt

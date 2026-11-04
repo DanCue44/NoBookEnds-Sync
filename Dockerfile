@@ -11,9 +11,12 @@ ARG BASE_IMAGE=nvidia/cuda:12.8.1-cudnn-runtime-ubuntu24.04
 # ---------------------------------------------------------------- build
 FROM ${BASE_IMAGE} AS build
 
+# A slow or briefly unreachable PyPI retries instead of failing the build
 ENV DEBIAN_FRONTEND=noninteractive \
     PIP_NO_CACHE_DIR=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_DEFAULT_TIMEOUT=60 \
+    PIP_RETRIES=10
 
 RUN apt-get update \
  && apt-get install -y --no-install-recommends python3 python3-venv \
