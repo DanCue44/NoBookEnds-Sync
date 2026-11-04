@@ -77,6 +77,9 @@ class Settings:
     whisper_language: str = field(default_factory=lambda: os.environ.get("WHISPER_LANGUAGE", "en"))
     whisper_vad: bool = field(default_factory=lambda: _bool("WHISPER_VAD", True))
 
+    # AZW3 and MOBI ebooks are converted to EPUB for Listen & Read (kindle.py)
+    kindle_ebooks: bool = field(default_factory=lambda: _bool("KINDLE_EBOOKS", True))
+
     # jobs
     max_audio_sec: float = field(default_factory=lambda: _float("MAX_AUDIO_SEC", 0.0))
     failed_retry_after_sec: float = field(default_factory=lambda: _float("FAILED_RETRY_AFTER_SEC", 86400.0))
@@ -124,8 +127,13 @@ class Settings:
     def tmp_dir(self) -> Path:
         return self.data_dir / "tmp"
 
+    @property
+    def converted_dir(self) -> Path:
+        return self.data_dir / "converted"
+
     def ensure_dirs(self):
-        for d in (self.data_dir, self.results_dir, self.transcripts_dir, self.models_dir, self.tmp_dir):
+        for d in (self.data_dir, self.results_dir, self.transcripts_dir, self.models_dir, self.tmp_dir,
+                  self.converted_dir):
             d.mkdir(parents=True, exist_ok=True)
 
 

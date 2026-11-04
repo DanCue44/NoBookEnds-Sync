@@ -1,6 +1,8 @@
 """API contract and auth tests against a mocked Audiobookshelf."""
 
+import struct
 import time
+from pathlib import Path
 
 import httpx
 import pytest
@@ -15,9 +17,12 @@ from nobookends_sync.results import save_result
 AUDIO = "audio-1"
 EBOOK = "ebook-1"
 OTHER = "audio-private"
+KINDLE = "ebook-kindle"
+PROTECTED = "ebook-drm"
+AZW3 = (Path(__file__).parent / "fixtures" / "kindle" / "rich.azw3").read_bytes()
 
 USERS = {
-    "tok-good": {"id": "u1", "username": "alice", "access": {AUDIO, EBOOK}},
+    "tok-good": {"id": "u1", "username": "alice", "access": {AUDIO, EBOOK, KINDLE, PROTECTED}},
     "tok-limited": {"id": "u2", "username": "bob", "access": {AUDIO}},
     "svc-key": {"id": "u3", "username": "nobookends-sync", "access": {AUDIO, EBOOK, OTHER}},
 }
@@ -28,12 +33,24 @@ ITEMS = {
     ], "ebookFile": None}},
     EBOOK: {"id": EBOOK, "media": {"audioFiles": [], "ebookFile": {"ino": "9", "ebookFormat": "epub"}}},
     OTHER: {"id": OTHER, "media": {"audioFiles": [{"ino": "4", "duration": 10}], "ebookFile": None}},
+    KINDLE: {"id": KINDLE, "media": {"audioFiles": [], "ebookFile": {
+        "ino": "21", "ebookFormat": "azw3", "metadata": {"size": len(AZW3), "mtimeMs": 5}}}},
+    PROTECTED: {"id": PROTECTED, "media": {"audioFiles": [], "ebookFile": {
+        "ino": "22", "ebookFormat": "mobi", "metadata": {"size": 9, "mtimeMs": 5}}}},
 }
+
+
+def _drm(data: bytes) -> bytes:
+    (first,) = struct.unpack_from(">L", data, 78)
+    out = bytearray(data)
+    out[first + 12:first + 14] = b"\x00\x02"
+    return bytes(out)
 
 
 class FakeAbs:
     def __init__(self):
         self.calls = []
+        self.downloads = 0
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
         self.calls.append(request.url.path)
@@ -47,6 +64,9 @@ class FakeAbs:
             item_id = request.url.path.split("/")[3]
             if item_id not in ITEMS or item_id not in user["access"]:
                 return httpx.Response(404, text="Not Found")
+            if request.url.path.endswith("/ebook"):
+                self.downloads += 1
+                return httpx.Response(200, content=AZW3 if item_id == KINDLE else _drm(AZW3))
             return httpx.Response(200, json=ITEMS[item_id])
         return httpx.Response(404)
 
@@ -330,3 +350,43 @@ def test_invalid_auto_window_fails_at_startup(tmp_path):
     s.auto_window = "nightly"
     with pytest.raises(SystemExit):
         create_app(s, start_background=False, gpu=False)
+
+
+# ------------------------------------------------------------------ Kindle ebooks
+
+
+def test_kindle_ebook_as_epub(env):
+    client, s, fake = env
+    r = client.get(f"/api/v1/ebooks/{KINDLE}/epub", headers=H)
+    assert r.status_code == 200, r.text
+    assert r.headers["content-type"] == "application/epub+zip"
+    assert r.content[:2] == b"PK" and b"application/epub+zip" in r.content[:80]
+    etag = r.headers["etag"]
+    again = client.get(f"/api/v1/ebooks/{KINDLE}/epub", headers=H)
+    assert again.content == r.content and fake.downloads == 1  # converted once
+    assert client.get(f"/api/v1/ebooks/{KINDLE}/epub", headers={**H, "If-None-Match": etag}).status_code == 304
+
+
+def test_kindle_ebook_errors(env):
+    client, s, _ = env
+    assert client.get(f"/api/v1/ebooks/{KINDLE}/epub").status_code == 401
+    limited = {"Authorization": "Bearer tok-limited"}
+    assert client.get(f"/api/v1/ebooks/{KINDLE}/epub", headers=limited).status_code == 404
+    r = client.get(f"/api/v1/ebooks/{EBOOK}/epub", headers=H)
+    assert r.status_code == 415 and r.json()["reason"] == "not_kindle"
+    r = client.get(f"/api/v1/ebooks/{AUDIO}/epub", headers=H)
+    assert r.status_code == 404 and r.json()["reason"] == "no_ebook"
+    r = client.get(f"/api/v1/ebooks/{PROTECTED}/epub", headers=H)
+    assert r.status_code == 422 and r.json()["reason"] == "drm_protected"
+    s.kindle_ebooks = False
+    r = client.get(f"/api/v1/ebooks/{KINDLE}/epub", headers=H)
+    assert r.status_code == 503 and r.json()["reason"] == "kindle_disabled"
+
+
+def test_post_accepts_kindle_ebooks(env):
+    client, s, _ = env
+    r = client.post("/api/v1/alignments", json={"audioItemId": AUDIO, "ebookItemId": KINDLE}, headers=H)
+    assert r.status_code == 200 and r.json()["status"] == "queued"
+    s.kindle_ebooks = False
+    r = client.post("/api/v1/alignments", json={"audioItemId": AUDIO, "ebookItemId": PROTECTED}, headers=H)
+    assert r.status_code == 400

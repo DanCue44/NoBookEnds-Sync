@@ -35,11 +35,11 @@ def test_author_surname():
 
 
 def _raw(id_, title, author, *, audio=False, ebook=False, isbn=None, asin=None, added=1000, updated=None,
-         subtitle=None, lib="L"):
+         subtitle=None, lib="L", fmt="epub"):
     media = {"metadata": {"title": title, "subtitle": subtitle, "authorName": author, "isbn": isbn, "asin": asin},
              "numTracks": 3 if audio else 0, "numAudioFiles": 3 if audio else 0, "duration": 100.0 if audio else 0}
     if ebook:
-        media["ebookFormat"] = "epub"
+        media["ebookFormat"] = fmt
     return {"id": id_, "libraryId": lib, "addedAt": added, "updatedAt": updated or added, "size": 10, "media": media}
 
 
@@ -75,6 +75,26 @@ def test_single_item_with_audio_and_ebook():
     items = [_rec("x", "Dune", "Frank Herbert", audio=True, ebook=True),
              _rec("e", "Dune", "Frank Herbert", ebook=True)]
     assert find_pairs(items) == [("x", "x", "same item")]
+
+
+def test_kindle_ebooks_pair_when_there_is_no_epub():
+    items = [
+        _rec("a1", "Dune", "Frank Herbert", audio=True),
+        _rec("k1", "Dune", "Frank Herbert", ebook=True, fmt="azw3"),
+        _rec("a2", "Emma", "Jane Austen", audio=True),
+        _rec("k2", "Emma", "Jane Austen", ebook=True, fmt="mobi"),
+        _rec("e2", "Emma", "Jane Austen", ebook=True),
+    ]
+    pairs = {(a, e) for a, e, _ in find_pairs(items)}
+    assert pairs == {("a1", "k1"), ("a2", "e2")}  # the EPUB copy wins when there is one
+    assert find_pairs(items, kindle=False) == [("a2", "e2", "title+author")]
+
+
+def test_item_with_audio_and_a_kindle_ebook():
+    own = _rec("x", "Dune", "Frank Herbert", audio=True, ebook=True, fmt="azw3")
+    assert find_pairs([own]) == [("x", "x", "same item")]
+    # another item's EPUB is preferred to its own AZW3
+    assert find_pairs([own, _rec("e", "Dune", "Frank Herbert", ebook=True)]) == [("x", "e", "title+author")]
 
 
 def test_non_epub_ebooks_are_ignored():

@@ -78,7 +78,8 @@ def test_capabilities_public_alignment_on(env):
     assert r.status_code == 200
     assert r.json() == {"version": __version__, "alignment": True, "userData": True,
                         "collections": ["podcastSubscriptions", "podcastProgress", "ratings", "highlights", "clips",
-                                        "readingState", "appSettings", "achievements", "listeningPaths"]}
+                                        "readingState", "appSettings", "achievements", "listeningPaths"],
+                        "kindleEbooks": True, "kindleFormats": ["azw3", "azw", "mobi", "kf8", "prc"]}
     assert fake.calls == 0
     assert set(client.get("/api/v1/health").json()) == {"ok", "version", "gpu"}
 

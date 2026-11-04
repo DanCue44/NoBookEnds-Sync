@@ -343,6 +343,33 @@ Quality is reported per job (`quality` in the status object and admin view):
 share of transcribed speech time that falls inside segments, `bookCoverage` =
 share of book words inside segments (low for abridged editions).
 
+### Kindle ebooks (AZW3 and MOBI)
+
+An audiobook whose only ebook is an AZW3 or MOBI file can use Listen & Read
+too: the service converts the file to EPUB (in Python, no Calibre needed),
+aligns against that EPUB and serves the same copy to the app at
+`GET /api/v1/ebooks/{ebookItemId}/epub`, so the CFIs in the alignment match
+what the reader shows. The copy is cached under `/data/converted`, one per
+ebook file; a changed file, or a newer converter, makes a new copy and
+re-aligns the book. When an audiobook matches both an EPUB and a Kindle file,
+the EPUB is used.
+
+KF8 (AZW3, and the KF8 half of a combined MOBI) and older Mobipocket files
+are read, uncompressed or compressed. Files with DRM (bought from a store)
+cannot be converted. Errors use the `reason` field:
+
+| Status | `reason` | Meaning |
+| --- | --- | --- |
+| 404 | `no_ebook` | the item has no ebook file |
+| 415 | `not_kindle` | the ebook is not AZW3 or MOBI (read it from Audiobookshelf) |
+| 422 | `drm_protected` | the file has DRM |
+| 422 | `unreadable_ebook` | the file could not be converted |
+| 413 | `too_large` | the file is over 512 MB |
+| 503 | `kindle_disabled` | `KINDLE_EBOOKS=false` |
+
+The download uses the reader's own token, so their Audiobookshelf access
+applies, as for the alignment endpoints.
+
 ### CFIs and offsets
 
 For every spine item the service builds `body.textContent` (all text nodes
@@ -410,9 +437,10 @@ ABS reports it). ABS unreachable: 502.
 | Method | Path | Notes |
 | --- | --- | --- |
 | GET | `/api/v1/health` | public: `{ ok, version, gpu }` |
-| GET | `/api/v1/capabilities` | public: `{ version, alignment, userData, collections }` |
+| GET | `/api/v1/capabilities` | public: `{ version, alignment, userData, collections, kindleEbooks, kindleFormats }` |
 | GET | `/api/v1/alignments/{audioItemId}?ebookItemId=...[&from=sec&to=sec]` | status object with segments; `ETag`, `If-None-Match` -> 304 |
 | POST | `/api/v1/alignments` | body `{ audioItemId, ebookItemId }`; idempotent; status object without segments |
+| GET | `/api/v1/ebooks/{ebookItemId}/epub` | an AZW3 or MOBI ebook as the EPUB its alignment uses (see Kindle ebooks); `ETag`, `If-None-Match` -> 304 |
 
 Status object:
 
@@ -478,10 +506,14 @@ Responses over 1 KB are gzip-compressed when the client sends
 `GET /api/v1/capabilities` (no auth) tells the app what this server offers:
 
 ```json
-{ "version": "1.6.0", "alignment": true, "userData": true,
+{ "version": "1.7.0", "alignment": true, "userData": true,
   "collections": ["podcastSubscriptions", "podcastProgress", "ratings", "highlights", "clips",
-                  "readingState", "appSettings", "achievements", "listeningPaths"] }
+                  "readingState", "appSettings", "achievements", "listeningPaths"],
+  "kindleEbooks": true, "kindleFormats": ["azw3", "azw", "mobi", "kf8", "prc"] }
 ```
+
+`kindleEbooks` is false when `KINDLE_EBOOKS=false`. Servers older than 1.7.0
+leave both fields out.
 
 `alignment` is false when the alignment worker is switched off
 (`ALIGNMENT_ENABLED=false`); `POST /api/v1/alignments` then answers `503`
@@ -708,6 +740,7 @@ records, `deleted` tombstones, `users` readers with at least one live record
 | `WHISPER_CPU_THREADS` | `4` (`auto` in the CPU image) | CTranslate2 CPU threads; `auto` or `0`: the `--cpus` limit if set, else half the logical CPUs, at most 16 |
 | `WHISPER_LANGUAGE` | `en` | for multilingual models |
 | `WHISPER_VAD` | `true` | Silero VAD skips silence/music (faster, fewer hallucinations) |
+| `KINDLE_EBOOKS` | `true` | convert AZW3 and MOBI ebooks for Listen & Read (see Kindle ebooks) |
 | `MAX_AUDIO_SEC` | `0` | limit every job to the first N seconds (testing); 0 = whole book |
 | `AUTO_ALIGN` | `true` | auto mode |
 | `AUTO_POLL_MINUTES` | `10` | poll interval (discovery runs all day) |
@@ -715,7 +748,7 @@ records, `deleted` tombstones, `users` readers with at least one live record
 | `AUTO_PAUSE_GRACE_MINUTES` | `15` | an auto job that has not reached a checkpoint this long after the window closed is stopped (it resumes from its last checkpoint) |
 | `TZ` | container default (UTC) | time zone for `AUTO_WINDOW`, e.g. `America/Chicago` (Unraid sets it automatically) |
 | `AUTO_FULL_RESYNC_HOURS` | `6` | full listing (notices removed items) |
-| `AUTO_MAX_EBOOKS_PER_AUDIO` | `3` | cap on EPUB matches per audiobook |
+| `AUTO_MAX_EBOOKS_PER_AUDIO` | `3` | cap on ebook matches per audiobook |
 | `FAILED_RETRY_AFTER_SEC` | `86400` | user POST retry window for failed jobs |
 | `AUTH_CACHE_SEC` | `60` | token and item access cache |
 | `DATA_DIR` | `/data` | state, results, transcripts, models (`/data/models`), temp files |

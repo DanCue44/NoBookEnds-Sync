@@ -1,6 +1,6 @@
 [project]
 name = "nobookends-sync"
-version = "1.6.0"
+version = "1.7.0"
 description = "Aligns audiobook narration to EPUB text for NoBookEnds read-along"
 requires-python = ">=3.11"
 

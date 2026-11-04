@@ -15,6 +15,8 @@ from pathlib import Path
 
 import httpx
 
+from .kindle import CONVERTER_VERSION, KINDLE_FORMATS
+
 TIMEOUT = httpx.Timeout(30.0, read=300.0)
 
 
@@ -84,7 +86,10 @@ def ebook_file(item: dict) -> dict | None:
 def file_signature(audio_item: dict, ebook_item: dict) -> str:
     parts = [[t["ino"], t["size"], t["mtime"], round(t["duration"], 2)] for t in audio_tracks(audio_item)]
     eb = ebook_file(ebook_item) or {}
-    raw = json.dumps({"a": parts, "e": [eb.get("ino"), eb.get("size"), eb.get("mtime")]}, sort_keys=True)
+    e = [eb.get("ino"), eb.get("size"), eb.get("mtime")]
+    if eb.get("format") in KINDLE_FORMATS:
+        e.append(f"kindle{CONVERTER_VERSION}")
+    raw = json.dumps({"a": parts, "e": e}, sort_keys=True)
     return hashlib.sha256(raw.encode()).hexdigest()[:24]
 
 
@@ -249,6 +254,28 @@ class UserAuth:
             "hasAudio": bool(media.get("tracks") or media.get("audioFiles") or media.get("numTracks")),
             "hasEbook": bool(media.get("ebookFile") or media.get("ebookFormat")),
             "ebookFormat": ((media.get("ebookFile") or {}).get("ebookFormat") or media.get("ebookFormat") or ""),
+            "ebookFile": ebook_file(d),
         }
         self.item_cache.set(k, info)
         return info
+
+    async def download_ebook(self, token: str, item_id: str, max_bytes: int = 512 << 20) -> bytes:
+        """The item's ebook file, read with the user's own token (so their access applies)."""
+        try:
+            async with self.client.stream("GET", f"/api/items/{item_id}/ebook",
+                                          headers={"Authorization": f"Bearer {token}"},
+                                          timeout=httpx.Timeout(120.0)) as r:
+                if r.status_code == 401:
+                    raise AbsError(401, "invalid or expired token")
+                if r.status_code in (403, 404):
+                    raise AbsError(r.status_code, "item not found or not accessible")
+                if r.status_code >= 400:
+                    raise AbsError(502, f"ABS ebook download returned {r.status_code}")
+                out = bytearray()
+                async for chunk in r.aiter_bytes():
+                    out += chunk
+                    if len(out) > max_bytes:
+                        raise AbsError(413, "ebook file is too large")
+                return bytes(out)
+        except httpx.HTTPError as e:
+            raise AbsError(502, f"ABS unreachable: {e}") from e

@@ -15,13 +15,15 @@ from typing import Any, Literal
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.gzip import GZipMiddleware
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, Response
 from pydantic import BaseModel, Field
 
 from . import ALGO_VERSION, SCHEMA_VERSION, __version__
 from .abs_client import AbsError, ServiceClient, UserAuth, audio_tracks, ebook_file
 from .config import Settings, get_settings
+from .converted import cache_key, cached_path, ensure_converted, is_kindle
 from .db import DB
+from .kindle import KINDLE_FORMATS, DrmProtected, KindleError
 from .jobs import PRIORITY_ADMIN, PRIORITY_AUTO, PRIORITY_USER, request_alignment, requeue_outdated
 from .results import load_result
 from .schedule import parse_window, window_open
@@ -254,7 +256,8 @@ def create_app(
     @app.get("/api/v1/capabilities")
     async def capabilities():
         return {"version": __version__, "alignment": bool(s.alignment_enabled), "userData": True,
-                "collections": list(COLLECTIONS)}
+                "collections": list(COLLECTIONS), "kindleEbooks": bool(s.kindle_ebooks),
+                "kindleFormats": list(KINDLE_FORMATS) if s.kindle_ebooks else []}
 
     @app.get("/api/v1/alignments/{audio_item_id}")
     async def get_alignment(
@@ -279,7 +282,8 @@ def create_app(
             return _reason(503, "alignment_disabled", "alignment is disabled on this server")
         if not audio.get("hasAudio"):
             raise HTTPException(400, "audioItemId has no audio")
-        if not ebook.get("hasEbook") or (ebook.get("ebookFormat") or "epub").lower() != "epub":
+        fmt = (ebook.get("ebookFormat") or "epub").lower()
+        if not ebook.get("hasEbook") or (fmt != "epub" and not (s.kindle_ebooks and is_kindle(fmt))):
             raise HTTPException(400, "ebookItemId has no EPUB")
         request_alignment(db(), s, req.audioItemId, req.ebookItemId, source=f"user:{user.get('username')}",
                           priority=PRIORITY_USER)
@@ -288,6 +292,44 @@ def create_app(
         body, etag = status_object(req.audioItemId, req.ebookItemId, duration_fallback=audio.get("duration"),
                                    with_segments=False)
         return JSONResponse(body, headers={"ETag": etag, "Cache-Control": "no-store"})
+
+    @app.get("/api/v1/ebooks/{ebook_item_id}/epub")
+    async def kindle_epub(request: Request, ebook_item_id: str):
+        """An AZW3 or MOBI ebook as the EPUB Listen & Read was aligned against."""
+        token = _bearer(request)
+        auth: UserAuth = state["auth"]
+        try:
+            await auth.me(token)
+            item = await auth.item(token, ebook_item_id)
+        except AbsError as e:
+            raise _abs_http(e) from e
+        eb = item.get("ebookFile")
+        if not item.get("hasEbook") or not eb:
+            return _reason(404, "no_ebook", "this item has no ebook file")
+        if not is_kindle(eb.get("format")):
+            return _reason(415, "not_kindle", "this ebook is not an AZW3 or MOBI file")
+        if not s.kindle_ebooks:
+            return _reason(503, "kindle_disabled", "Kindle ebooks are turned off on this server")
+        etag = '"' + cache_key(ebook_item_id, eb) + '"'
+        headers = {"ETag": etag, "Cache-Control": "private, no-cache"}
+        if _etag_matches(request.headers.get("if-none-match"), etag):
+            return Response(status_code=304, headers=headers)
+        try:
+            path = cached_path(s.converted_dir, ebook_item_id, eb)
+            if not path.exists():
+                data = await auth.download_ebook(token, ebook_item_id)
+                path = await asyncio.to_thread(ensure_converted, s.converted_dir, ebook_item_id, eb, lambda: data)
+        except AbsError as e:
+            if e.status == 413:
+                return _reason(413, "too_large", "the ebook file is too large to convert")
+            raise _abs_http(e) from e
+        except DrmProtected:
+            return _reason(422, "drm_protected", "this ebook is protected with DRM and cannot be opened")
+        except KindleError as e:
+            log.warning("could not convert ebook %s: %s", ebook_item_id, e)
+            return _reason(422, "unreadable_ebook", "this ebook could not be converted")
+        return FileResponse(path, media_type="application/epub+zip", headers=headers,
+                            filename=f"{ebook_item_id}.epub")
 
     # ------------------------------------------------------------------ user data
 

@@ -23,8 +23,10 @@ from . import ALGO_VERSION, SCHEMA_VERSION, __version__
 from .abs_client import ServiceClient, audio_tracks, ebook_file, file_signature
 from .aligner import align_book, asr_tokens_from_words, count_anchor_hits
 from .config import Settings
+from .converted import ensure_converted, is_kindle
 from .db import DB
 from .epub import load_epub
+from .kindle import DrmProtected, KindleError
 from .results import save_result
 from .transcriber import Word
 
@@ -161,16 +163,34 @@ def _run(s: Settings, db: DB, abs_: ServiceClient, job: dict, work: Path):
     if not tracks:
         raise JobFailed("audio item has no audio tracks")
     eb = ebook_file(ebook_item)
-    if not eb or eb["format"] != "epub":
+    kindle_book = bool(eb) and is_kindle(eb["format"])
+    if not eb or (eb["format"] != "epub" and not (kindle_book and s.kindle_ebooks)):
         raise JobFailed("ebook item has no EPUB file")
     signature = file_signature(audio_item, ebook_item)
     book_duration = sum(t["duration"] for t in tracks)
     db.update_job(audio_id, ebook_id, duration_sec=book_duration, signature=signature)
 
-    epub_path = work / "book.epub"
-    abs_.download_ebook(ebook_id, epub_path)
-    book = load_epub(epub_path)
-    epub_path.unlink(missing_ok=True)
+    if kindle_book:
+        # The same converted copy the app is sent (GET /api/v1/ebooks/{id}/epub)
+        def fetch() -> bytes:
+            raw = work / "book.kindle"
+            abs_.download_ebook(ebook_id, raw)
+            data = raw.read_bytes()
+            raw.unlink(missing_ok=True)
+            return data
+
+        try:
+            book = load_epub(ensure_converted(s.converted_dir, ebook_id, eb, fetch))
+        except DrmProtected as e:
+            raise JobFailed("the ebook is protected with DRM and cannot be read") from e
+        except KindleError as e:
+            raise JobFailed(f"the ebook could not be converted: {e}") from e
+        stats["convertedFrom"] = eb["format"]
+    else:
+        epub_path = work / "book.epub"
+        abs_.download_ebook(ebook_id, epub_path)
+        book = load_epub(epub_path)
+        epub_path.unlink(missing_ok=True)
     if len(book.tokens) < 50:
         raise JobFailed("EPUB has no usable text")
     stats["bookTokens"] = len(book.tokens)

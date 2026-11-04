@@ -220,3 +220,76 @@ def test_paused_job_keeps_checkpoint_and_resumes(setup, monkeypatch):
     # file 0 came from the cache, file 1 resumed at its 30 s checkpoint, file 2 started fresh
     assert seen[2][:2] == ("ino1", 30.0) and seen[2][2] > 0
     assert seen[3] == ("ino2", 0.0, 0)
+
+
+def test_kindle_ebook_is_converted_and_aligned(tmp_path, monkeypatch):
+    """An AZW3 ebook: converted once, cached, and aligned against that EPUB."""
+    import io
+    from pathlib import Path
+
+    from nobookends_sync import kindle
+    from nobookends_sync.converted import cached_path
+    from nobookends_sync.epub import load_epub
+
+    azw3 = Path(__file__).parent / "fixtures" / "kindle" / "alice.azw3"
+    converted = load_epub(io.BytesIO(kindle.convert_to_epub(azw3.read_bytes())))
+    s = Settings()
+    s.data_dir = tmp_path
+    s.ensure_dirs()
+    db = DB(s.db_path)
+    db.insert_job(AUDIO, EBOOK, priority=10, source="test", sort_key=0)
+    words = [(converted.tokens[j], 2.0 + 0.4 * j) for j in range(len(converted.tokens))]
+    tracks = [{"index": 1, "ino": "ino0", "duration": 400.0, "startOffset": 0.0, "contentUrl": "/f/0",
+               "metadata": {"ext": ".m4a", "size": 1000, "mtimeMs": 1}}]
+    eb = {"ino": "e", "ebookFormat": "azw3", "metadata": {"size": 5, "mtimeMs": 1}}
+    audio_item = {"id": AUDIO, "media": {"tracks": tracks, "audioFiles": []}}
+    ebook_item = {"id": EBOOK, "media": {"ebookFile": eb}}
+    downloads = []
+
+    class FakeClient:
+        def __init__(self, *a, **k):
+            pass
+
+        def get_item(self, item_id, expanded=True):
+            return audio_item if item_id == AUDIO else ebook_item
+
+        def download_ebook(self, item_id, dest):
+            downloads.append(item_id)
+            shutil.copy(azw3, dest)
+
+        def download_track(self, item_id, track, dest):
+            dest.write_text(track["ino"])
+
+        def close(self):
+            pass
+
+    def fake_transcribe_file(transcriber, src, track, need, on_progress, **kw):
+        return [Word(t, a, a + 0.25, 0.9) for t, a in words if a < (need or track["duration"])]
+
+    import nobookends_sync.transcriber as tmod
+
+    class FakeTranscriber:
+        device, compute_type = "cpu", "int8"
+
+        def __init__(self, settings):
+            pass
+
+    monkeypatch.setattr(pipeline, "ServiceClient", FakeClient)
+    monkeypatch.setattr(pipeline, "_transcribe_file", fake_transcribe_file)
+    monkeypatch.setattr(tmod, "Transcriber", FakeTranscriber)
+    monkeypatch.setattr(pipeline, "MISMATCH_CHECK_TOKENS", 10**9)
+
+    pipeline.run_job(s, AUDIO, EBOOK)
+    job = db.get_job(AUDIO, EBOOK)
+    assert job["status"] == "ready", job["error"]
+    assert job["quality"]["score"] > 0.9
+    eb_info = {"ino": "e", "size": 5, "mtime": 1}
+    assert cached_path(s.converted_dir, EBOOK, eb_info).exists()
+    db.update_job(AUDIO, EBOOK, status="processing")
+    pipeline.run_job(s, AUDIO, EBOOK)
+    assert downloads == [EBOOK]  # the second run read the cached copy
+
+    s.kindle_ebooks = False
+    db.update_job(AUDIO, EBOOK, status="processing")
+    pipeline.run_job(s, AUDIO, EBOOK)
+    assert db.get_job(AUDIO, EBOOK)["status"] == "failed"

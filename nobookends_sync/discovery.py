@@ -29,6 +29,7 @@ import unicodedata
 from .abs_client import AbsError, ServiceClient, file_signature
 from .config import Settings
 from .db import DB
+from .kindle import KINDLE_FORMATS
 from .jobs import PRIORITY_AUTO, request_alignment, requeue_changed, requeue_outdated
 
 log = logging.getLogger("nbs.discovery")
@@ -107,7 +108,8 @@ def item_record(item: dict, library_id: str | None = None) -> dict:
         "match_key": f"{key}|{sur}" if key else None,
         "identifiers": identifiers(md),
         "has_audio": 1 if has_audio else 0,
-        "has_ebook": 1 if ebook_format == "epub" else 0,
+        # 1: an EPUB, 2: an AZW3 or MOBI (converted for alignment; an EPUB copy is preferred)
+        "has_ebook": 1 if ebook_format == "epub" else 2 if ebook_format in KINDLE_FORMATS else 0,
         "duration": media.get("duration"),
         "added_at": item.get("addedAt"),
         "updated_at": item.get("updatedAt"),
@@ -116,9 +118,15 @@ def item_record(item: dict, library_id: str | None = None) -> dict:
     }
 
 
-def find_pairs(items: list[dict], max_ebooks_per_audio: int = 3) -> list[tuple[str, str, str]]:
-    """Return (audio_id, ebook_id, reason) for every audio item and its matching EPUB items."""
-    ebooks = [i for i in items if i["has_ebook"] and not i.get("missing")]
+def find_pairs(items: list[dict], max_ebooks_per_audio: int = 3,
+               kindle: bool = True) -> list[tuple[str, str, str]]:
+    """Return (audio_id, ebook_id, reason) for every audio item and its matching ebook items.
+
+    EPUB items come first; AZW3 and MOBI items (kindle) pair only when the
+    audiobook has no EPUB match.
+    """
+    usable = (1, 2) if kindle else (1,)
+    ebooks = [i for i in items if i["has_ebook"] in usable and not i.get("missing")]
     by_ident: dict[str, list[dict]] = {}
     by_key: dict[str, list[dict]] = {}
     for e in ebooks:
@@ -130,7 +138,7 @@ def find_pairs(items: list[dict], max_ebooks_per_audio: int = 3) -> list[tuple[s
     for a in items:
         if not a["has_audio"] or a.get("missing"):
             continue
-        if a["has_ebook"]:
+        if a["has_ebook"] == 1:
             out.append((a["id"], a["id"], "same item"))
             continue
         found: dict[str, tuple[int, str, dict]] = {}
@@ -139,6 +147,13 @@ def find_pairs(items: list[dict], max_ebooks_per_audio: int = 3) -> list[tuple[s
                 found.setdefault(e["id"], (0, ident.split(":")[0], e))
         for e in by_key.get(a["match_key"] or "", []) if a["match_key"] else []:
             found.setdefault(e["id"], (1, "title+author", e))
+        found.pop(a["id"], None)
+        if any(e["has_ebook"] == 1 for _, _, e in found.values()):
+            found = {k: v for k, v in found.items() if v[2]["has_ebook"] == 1}
+        elif a["has_ebook"] in usable:
+            # Its own AZW3 or MOBI, when no other item has an EPUB of it
+            out.append((a["id"], a["id"], "same item"))
+            continue
         ranked = sorted(found.values(), key=lambda t: (t[0], -(t[2].get("updated_at") or 0)))
         for _, reason, e in ranked[:max_ebooks_per_audio]:
             if e["id"] != a["id"]:
@@ -232,7 +247,7 @@ class Discovery(threading.Thread):
         by_id = {i["id"]: i for i in items}
         queued = 0
         new_pairs = 0
-        for a, e, reason in find_pairs(items, self.s.auto_max_ebooks_per_audio):
+        for a, e, reason in find_pairs(items, self.s.auto_max_ebooks_per_audio, kindle=self.s.kindle_ebooks):
             if self.db.add_pair(a, e, reason):
                 new_pairs += 1
             if self.db.get_job(a, e) is None:
