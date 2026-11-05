@@ -18,8 +18,8 @@
   <PostArgs/>
   <CPUset/>
   <DateInstalled/>
-  <DonateText/>
-  <DonateLink/>
+  <DonateText>Leave a tip for NoBookEnds</DonateText>
+  <DonateLink>https://buy.stripe.com/28E8wQfZ74wj1n0g4h8k802</DonateLink>
   <Requires>Audiobookshelf, and the Nvidia Driver plugin for GPU transcription.</Requires>
   <Config Name="WebUI / API port" Target="8000" Default="8000" Mode="tcp" Description="HTTP API port. Point your reverse proxy (for example booksync.yourdomain.com) at it." Type="Port" Display="always" Required="true" Mask="false">8000</Config>
   <Config Name="Data" Target="/data" Default="/mnt/user/appdata/nobookends-sync" Mode="rw" Description="Database, alignment results, cached transcripts and whisper models (a few GB for a large library)." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/nobookends-sync</Config>
